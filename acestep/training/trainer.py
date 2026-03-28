@@ -93,9 +93,8 @@ def _select_fabric_precision(device_type: str) -> str:
     if device_type in ("cuda", "xpu"):
         return "bf16-mixed"
     if device_type == "mps":
-        # Use AMP on MPS for better throughput. Trainable LoRA parameters are
-        # explicitly forced to fp32 before optimizer/Fabric setup.
-        return "16-mixed"
+        # MPS GradScaler has issues with inf checks in AMP; use fp32 for stability.
+        return "32-true"
     return "32-true"
 
 

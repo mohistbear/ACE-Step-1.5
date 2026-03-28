@@ -33,6 +33,34 @@ from acestep.gpu_config import get_lm_gpu_memory_ratio, get_gpu_memory_gb, get_l
 VRAM_SAFE_FREE_GB = 2.0
 
 
+def _nano_vllm_enforce_eager_cuda_override() -> tuple[bool, str]:
+    """Return whether to force nano-vllm eager mode on CUDA (disables CUDA graph capture).
+
+    RTX 50-series / Blackwell and some batch-CFG paths can hit PyTorch errors such as
+    \"Offset increment outside graph capture encountered unexpectedly\" when graphs
+    are enabled. ROCm/Jetson are handled separately at the call site.
+
+    Override: set ``ACESTEP_LM_ENFORCE_EAGER=1`` (or ``true``/``yes``).
+
+    Returns:
+        ``(True, reason)`` to force eager, else ``(False, \"\")``.
+    """
+    env = os.environ.get("ACESTEP_LM_ENFORCE_EAGER", "").strip().lower()
+    if env in {"1", "true", "yes", "y", "on"}:
+        return True, "ACESTEP_LM_ENFORCE_EAGER"
+    if not torch.cuda.is_available():
+        return False, ""
+    try:
+        dn = torch.cuda.get_device_name(0).lower()
+    except Exception:
+        return False, ""
+    # Consumer RTX 50 / known Blackwell marketing strings (extend if new SKUs fail).
+    markers = ("5090", "5080", "5070", "5060", "5050", "blackwell")
+    if any(m in dn for m in markers):
+        return True, f"GPU {dn!r}"
+    return False, ""
+
+
 def _warn_if_prerelease_python():
     v = sys.version_info
     if getattr(v, "releaselevel", "final") != "final" and sys.platform.startswith("linux"):
@@ -651,7 +679,19 @@ class LLMHandler:
                     "Triton not available: disabling CUDA graph capture for nano-vllm "
                     "(CUDA graphs require torch.compile which depends on Triton)"
                 )
-            enforce_eager_for_vllm = bool(is_rocm or is_jetson or not _has_flash_attn or not _has_triton)
+            eager_cuda, eager_cuda_reason = _nano_vllm_enforce_eager_cuda_override()
+            enforce_eager_for_vllm = bool(
+                is_rocm
+                or is_jetson
+                or not _has_flash_attn
+                or not _has_triton
+                or eager_cuda
+            )
+            if eager_cuda:
+                logger.info(
+                    "nano-vllm: enforcing eager execution (CUDA graphs off): "
+                    f"{eager_cuda_reason}"
+                )
 
             # Auto-detect best backend on Apple Silicon
             if backend == "mlx" or (backend == "vllm" and device == "mps"):

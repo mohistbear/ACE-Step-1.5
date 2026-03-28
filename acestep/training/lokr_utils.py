@@ -115,6 +115,11 @@ def inject_lokr_into_dit(
 
     lycoris_net.apply_to()
 
+    # Move adapter parameters to the same device/dtype as the decoder
+    decoder_device = next(decoder.parameters()).device
+    decoder_dtype = next(decoder.parameters()).dtype
+    lycoris_net.to(decoder_device, decoder_dtype)
+
     # Keep a reference on decoder so it stays discoverable after wrappers.
     # Always refresh this reference to avoid stale nets from earlier runs.
     decoder._lycoris_net = lycoris_net
